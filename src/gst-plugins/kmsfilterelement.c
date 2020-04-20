@@ -77,19 +77,19 @@ G_DEFINE_TYPE_WITH_CODE (KmsFilterElement, kms_filter_element,
 
 static void
 kms_filter_element_connect_filter (KmsFilterElement * self,
-    KmsElementPadType type, GstElement * filter, GstElement * agnosticbin)
+    KmsElementPadType type, GstElement * sink)
 {
   GstElement *queue = gst_element_factory_make ("queue", NULL);
   GstPad *target = gst_element_get_static_pad (queue, "sink");
 
   g_object_set (queue, "leaky", 2, "max-size-buffers", 1, NULL);
 
-  gst_bin_add_many (GST_BIN (self), queue, filter, NULL);
+  gst_bin_add_many (GST_BIN (self), queue, sink, NULL);
 
-  self->priv->filter = filter;
+  self->priv->filter = sink;
 
-  gst_element_link_many (queue, filter, agnosticbin, NULL);
-  gst_element_sync_state_with_parent (filter);
+  gst_element_link_many (queue, sink, NULL);
+  gst_element_sync_state_with_parent (sink);
   gst_element_sync_state_with_parent (queue);
 
   kms_element_connect_sink_target (KMS_ELEMENT (self), target, type);
@@ -109,9 +109,9 @@ kms_filter_element_connect_passthrough (KmsFilterElement * self,
 static void
 kms_filter_element_set_filter (KmsFilterElement * self, GstElement * filter)
 {
-  GstPad *sink = NULL, *src = NULL;
+  GstPad *sink = NULL;
   GstCaps *audio_caps = NULL, *video_caps = NULL;
-  GstCaps *sink_caps = NULL, *src_caps = NULL;
+  GstCaps *sink_caps = NULL;
 
   if (self->priv->filter != NULL) {
     GST_WARNING_OBJECT (self, "Factory changes are not currently allowed");
@@ -147,31 +147,18 @@ kms_filter_element_set_filter (KmsFilterElement * self, GstElement * filter)
     sink = gst_element_get_static_pad (filter, "video_sink");
   }
 
-  src = gst_element_get_static_pad (filter, "src");
-
-  if (sink == NULL || src == NULL) {
-    GST_ERROR_OBJECT (self, "Invalid factory \"%s\", unexpected pad templates",
-        self->priv->filter_factory);
-    g_object_unref (filter);
-    goto end;
-  }
-
   audio_caps = gst_caps_from_string (KMS_AGNOSTIC_AUDIO_CAPS);
   video_caps = gst_caps_from_string (KMS_AGNOSTIC_VIDEO_CAPS);
 
   sink_caps = gst_pad_query_caps (sink, NULL);
-  src_caps = gst_pad_query_caps (src, NULL);
 
   KMS_FILTER_ELEMENT_LOCK (self);
 
   if (self->priv->filter_type == KMS_FILTER_TYPE_AUTODETECT) {
-    if (gst_caps_can_intersect (audio_caps, sink_caps) &&
-        gst_caps_can_intersect (audio_caps, src_caps)) {
+    if (gst_caps_can_intersect (audio_caps, sink_caps)) {
       GST_DEBUG_OBJECT (self, "Connecting filter to audio");
       self->priv->filter_type = KMS_FILTER_TYPE_AUDIO;
-
-    } else if (gst_caps_can_intersect (video_caps, sink_caps)
-        && gst_caps_can_intersect (video_caps, src_caps)) {
+    } else if (gst_caps_can_intersect (video_caps, sink_caps)) {
       GST_DEBUG_OBJECT (self, "Connecting filter to video");
       self->priv->filter_type = KMS_FILTER_TYPE_VIDEO;
 
@@ -184,21 +171,11 @@ kms_filter_element_set_filter (KmsFilterElement * self, GstElement * filter)
   }
 
   if (self->priv->filter_type == KMS_FILTER_TYPE_VIDEO) {
-    kms_filter_element_connect_filter (self, KMS_ELEMENT_PAD_TYPE_VIDEO, filter,
-        kms_element_get_video_agnosticbin (KMS_ELEMENT (self)));
-    kms_filter_element_connect_passthrough (self, KMS_ELEMENT_PAD_TYPE_AUDIO,
-        kms_element_get_audio_agnosticbin (KMS_ELEMENT (self)));
+    kms_filter_element_connect_filter (self, KMS_ELEMENT_PAD_TYPE_VIDEO, filter);
   } else if (self->priv->filter_type == KMS_FILTER_TYPE_AUDIO) {
-    kms_filter_element_connect_filter (self, KMS_ELEMENT_PAD_TYPE_AUDIO, filter,
-        kms_element_get_audio_agnosticbin (KMS_ELEMENT (self)));
-    kms_filter_element_connect_passthrough (self, KMS_ELEMENT_PAD_TYPE_VIDEO,
-        kms_element_get_video_agnosticbin (KMS_ELEMENT (self)));
+    kms_filter_element_connect_filter (self, KMS_ELEMENT_PAD_TYPE_AUDIO, filter);
   } else {
-    GST_WARNING_OBJECT (self, "No filter configured, working in passthrogh");
-    kms_filter_element_connect_passthrough (self, KMS_ELEMENT_PAD_TYPE_VIDEO,
-        kms_element_get_video_agnosticbin (KMS_ELEMENT (self)));
-    kms_filter_element_connect_passthrough (self, KMS_ELEMENT_PAD_TYPE_AUDIO,
-        kms_element_get_audio_agnosticbin (KMS_ELEMENT (self)));
+    GST_WARNING_OBJECT (self, "No filter configured, do nothing");
   }
 
   /* Enable data pads */
@@ -211,9 +188,6 @@ end:
   if (sink_caps != NULL)
     gst_caps_unref (sink_caps);
 
-  if (src_caps != NULL)
-    gst_caps_unref (src_caps);
-
   if (audio_caps != NULL)
     gst_caps_unref (audio_caps);
 
@@ -222,9 +196,6 @@ end:
 
   if (sink != NULL)
     g_object_unref (sink);
-
-  if (src != NULL)
-    g_object_unref (src);
 }
 
 static void
